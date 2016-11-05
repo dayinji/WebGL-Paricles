@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - loaders - OBJ loader</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				font-family: Monospace;
+				background-color: #000;
+				color: #fff;
+				margin: 0px;
+				overflow: hidden;
+			}
+			#info {
+				color: #fff;
+				position: absolute;
+				top: 10px;
+				width: 100%;
+				text-align: center;
+				z-index: 100;
+				display:block;
+			}
+			#info a, .button { color: #f00; font-weight: bold; text-decoration: underline; cursor: pointer }
+		</style>
+	</head>
+
+	<body>
+		<script src="js/three.js"></script>
+		<script src="js/OBJLoader.js"></script>
+		<script src="js/GeometryUtils.js"></script>
+		<script src="js/GPUComputationRenderer.js"></script>
+
+		<!-- shader for bird's position -->
+		<script id="fragmentShaderPosition" type="x-shader/x-fragment">
+
+			uniform float time;
+			uniform float delta;
+			uniform float floorPosY;
+			uniform vec3 forcePos;
+			uniform float forceRadius;
+
+			float rand(vec2 co){
+				return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+			}
+
+			void main()	{
+
+				vec2 uv = gl_FragCoord.xy / resolution.xy;
+				vec4 tmpPos = texture2D( texturePosition, uv );
+				vec3 position = tmpPos.xyz;
+				vec3 velocity = texture2D( textureVelocity, uv ).xyz;
+
+				float factor = (rand(uv) + 1.0) / 10.0;
+
+				gl_FragColor = vec4( position + velocity * delta * 5. * factor , 1.0 );
+
+				/*vec3 ForcePos = vec3(forcePos.x, forcePos.y+110.0, forcePos.z);
+				if (length(position - ForcePos) <= forceRadius) {
+					vec3 dir = normalize(position - ForcePos);
+					gl_FragColor = vec4(forceRadius*dir + ForcePos, 1.0);
+				}*/
+
+				if (position.y < floorPosY) {
+					gl_FragColor = vec4(gl_FragColor.x, floorPosY, gl_FragColor.z, 1.0);
+				}
+
+
+			}
+
+		</script>
+
+		<!-- shader for bird's velocity -->
+		<script id="fragmentShaderVelocity" type="x-shader/x-fragment">
+
+			uniform float time;
+			uniform float delta;
+			uniform float floorPosY;
+			uniform vec3 forcePos;
+			uniform float forceRadius;
+
+			vec3 g = vec3(3, 3, 0);
+
+			float rand(vec2 co){
+				return sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453;
+			}
+
+			void main() {
+
+				vec2 uv = gl_FragCoord.xy / resolution.xy;
+				vec3 velocity = texture2D( textureVelocity, uv ).xyz;
+				vec3 position = texture2D( texturePosition, uv ).xyz;
+
+				if (/*texture2D( textureVelocity, uv ).a == 1.*/true) {
+					float factor = fract(rand(gl_FragCoord.xy));
+					factor = factor * factor * factor;
+					gl_FragColor = vec4( velocity + g*delta*factor, 0.0 );
+					if (position.y == floorPosY) {
+						if (length(gl_FragColor.xyz) < 0.5) {
+							gl_FragColor = vec4(0, 0, 0, 0.0);
+						} else {
+							vec3 floorNormal = normalize(vec3(rand(position.xy), abs(rand(position.xz)), rand(position.yz)));
+							gl_FragColor = vec4(reflect(gl_FragColor.xyz, floorNormal)*0.85, 0.0);
+						}
+					}
+				} else {
+					gl_FragColor = vec4( velocity , 1.0 );
+				} 
+				/*vec3 ForcePos = vec3(forcePos.x, forcePos.y+110.0, forcePos.z);
+				if (length(position - ForcePos) <= forceRadius) {
+					vec3 dir = normalize(position - ForcePos);
+					float force = (forceRadius - length(position - ForcePos)) / 10.0;
+					gl_FragColor = vec4(gl_FragColor.xyz + force*dir, 0.0);
+				}*/
+
+			}
+
+		</script>
+		<script id="fragmentShader" type="x-shader/x-fragment">
+
+			varying vec3 Normal;
+			varying vec3 FragPos;
+			vec3 lightPos = vec3(0, 600, 300);
+			vec3 diffuse = vec3(0.3, 0.3 ,0.3);
+			void main()
+			{
+				//gl_FragColor = vec4(1.0, 0.6, 0.8, 1.0);
+				// 环境光
+				//vec3 ambient = light.ambient*vec3(texture(material.diffuse, TexCoords));
+				// 漫反射
+				vec3 norm = normalize(Normal);
+				vec3 lightDir = normalize(lightPos - FragPos);
+				float diff = max(dot(norm, lightDir), 0.0);
+				diff = diff + 0.2;
+				if (diff > 1.0)
+					diff = 1.0;
+				//vec3 diffuse = diffuse*(diff*vec3(texture(material.diffuse, TexCoords)));
+				diffuse = diff*diffuse;
+				// 镜面光
+				/*vec3 viewDir = normalize(viewPos - FragPos);
+				vec3 reflectDir = reflect(-lightDir, norm);
+				float spec = pow(max(dot(viewDir, reflectDir), 0.0), 64);
+				vec3 specular = light.specular*(spec*vec3(texture(material.specular, TexCoords)));*/
+
+				//vec3 result = ambient + diffuse + specular;
+				gl_FragColor = vec4(diffuse, 1.0);
+
+			}
+
+		</script>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+
+			attribute vec2 reference;
+
+			varying vec3 Normal;
+			varying vec3 FragPos;
+
+			uniform sampler2D texturePosition;
+			// textureVelocity貌似没用
+			uniform sampler2D textureVelocity;
+
+			void main()
+			{
+				//position += speed*time;
+				vec3 tmpPos = texture2D( texturePosition, reference ).xyz;
+				vec3 tmpV = texture2D( textureVelocity, reference ).xyz;
+				//tmpPos = position;
+				//tmpPos = vec3(0., 100.0, 0.0);
+				vec4 mvPosition = modelViewMatrix * vec4( tmpPos, 1.0 );
+				gl_Position = projectionMatrix * mvPosition;
+				gl_PointSize = 1.5;
+				/*float pointSize = 15. - length(tmpV)*20.0;
+				if (pointSize < 0.)
+					pointSize = 0.;
+				gl_PointSize = pointSize;*/
+				Normal = normal;
+				FragPos = tmpPos;
+			}
+
+		</script>
+
+		<script>
+
+			var container;
+
+			var camera, scene, raycaster, renderer, forceSphere, mouse = new THREE.Vector2();
+
+			var windowHalfX = window.innerWidth / 2;
+			var windowHalfY = window.innerHeight / 2;
+			var isUserInteracting = false,
+			onMouseDownMouseX = 0, onMouseDownMouseY = 0,
+			lon = 0, onMouseDownLon = 0,
+			lat = 0, onMouseDownLat = 0,
+			phi = 0, theta = 0;
+
+
+			var ParticlesInitPosition = [];
+			var ParticlesInitNormal = [];
+
+			var last = performance.now();
+
+			var gpuCompute;
+			var velocityVariable;
+			var positionVariable;
+			var positionUniforms;
+			var velocityUniforms;
+			var particleUniforms;
+
+			var forceRadius = 45.0;
+
+			var hasLoadObj = false;
+
+			var WIDTH = 1024;
+			var particleCount = WIDTH*WIDTH;
+
+			init();
+			animate();
+
+
+			function init() {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 2000 );
+				camera.position.z = 250;
+
+				// scene
+
+				scene = new THREE.Scene();
+				scene.fog = new THREE.Fog( 0x2a2e32, 2,  500);
+				//scene.fog = new THREE.Fog( 0x00ff00, 2,  500);
+
+				// Lights
+
+				scene.add( new THREE.HemisphereLight( 0x443333, 0x111122 ) );
+
+				addShadowedLight( 1, 1, 1, 0xffffff, 1 );
+				//addShadowedLight( 0.5, 1, -1, 0xffaa00, 0.5 );
+
+				// Ground
+
+				var plane = new THREE.Mesh(
+					new THREE.PlaneBufferGeometry( 1000, 1000 ),
+					new THREE.MeshPhongMaterial( { color: 0x33383d, specular: 0x101010 } )
+				);
+				plane.rotation.x = -Math.PI/2;
+				plane.position.y = -50;
+				scene.add( plane );
+
+				plane.receiveShadow = true;
+
+				// ForceSphere
+
+				forceSphere = new THREE.Mesh(
+					new THREE.SphereGeometry( forceRadius, 36, 36 ),
+					new THREE.MeshPhongMaterial( { color: 0xe8e8e8, specular: 0x101010, opacity: 0.2, transparent:true } )
+				);
+				//scene.add( forceSphere );
+
+
+				// OBJ
+				var manager = new THREE.LoadingManager();
+
+				var onProgress = function ( xhr ) {
+					if ( xhr.lengthComputable ) {
+						var percentComplete = xhr.loaded / xhr.total * 100;
+						console.log( Math.round(percentComplete, 2) + '% downloaded' );
+					}
+				};
+
+				var onError = function ( xhr ) {
+				};
+
+
+				var loader = new THREE.OBJLoader( manager );
+				loader.load( 'fo1.obj', function ( object ) {
+
+					object.traverse( function ( child ) {
+
+						if ( child instanceof THREE.Mesh ) {
+							child.castShadow = true;
+							child.receiveShadow = true;
+
+							var result = THREE.GeometryUtils.randomPointsInBufferGeometry(child.geometry, particleCount);
+							ParticlesInitPosition = result[0];
+							ParticlesInitNormal = result[1];
+
+							particleUniforms = {
+								texturePosition: { value: null },
+								textureVelocity: { value: null }
+								/*time: { value: 1.0 },
+								delta: { value: 0.0 }*/
+							};
+
+							var material = new THREE.ShaderMaterial( {
+
+								uniforms: particleUniforms,
+								vertexShader: document.getElementById( 'vertexShader' ).textContent,
+								fragmentShader: document.getElementById( 'fragmentShader' ).textContent
+
+							} );
+
+							var positions = new Float32Array( ParticlesInitPosition.length * 3 );
+							var normals = new Float32Array( ParticlesInitNormal.length * 3 );
+
+							for (var i = 0 ; i < ParticlesInitPosition.length ; i++) {
+								positions[i*3] = ParticlesInitPosition[i].x;
+								positions[i*3 + 1] = ParticlesInitPosition[i].y;
+								positions[i*3 + 2] = ParticlesInitPosition[i].z;
+								normals[i*3] = ParticlesInitNormal[i].x;
+								normals[i*3 + 1] = ParticlesInitNormal[i].y;
+								normals[i*3 + 2] = ParticlesInitNormal[i].z;
+							}
+
+
+							// itemSize = 3 because there are 3 values (components) per vertex
+							var geometry = new THREE.BufferGeometry();
+							geometry.addAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+							geometry.addAttribute( 'normal', new THREE.BufferAttribute( normals, 3 ) );
+							var references = new THREE.BufferAttribute( new Float32Array( particleCount * 2 ), 2 );
+							geometry.addAttribute( 'reference', references );
+
+							for( var v = 0; v < particleCount; v++ ) {
+
+								references.array[ v * 2     ] = (v % WIDTH) / WIDTH;
+								references.array[ v * 2 + 1 ] = Math.floor(v / WIDTH) / WIDTH;
+
+							}
+
+							system = new THREE.Points(geometry, material);
+							system.castShadow = true;
+							system.receiveShadow = true;
+							system.position.y = -110;
+
+							scene.add(system);
+
+							initComputeRenderer();
+
+						}
+
+					} );
+
+					hasLoadObj = true;
+
+					object.position.y = -110;
+					//scene.add( object );
+
+				}, onProgress, onError );
+
+				raycaster = new THREE.Raycaster();
+
+
+				renderer = new THREE.WebGLRenderer();
+				renderer.setClearColor( scene.fog.color );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				container.appendChild( renderer.domElement );
+
+				renderer.gammaInput = true;
+				renderer.gammaOutput = true;
+
+				renderer.shadowMap.enabled = true;
+				renderer.shadowMap.renderReverseSided = false;
+
+
+				document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+				document.addEventListener( 'mousedown', onDocumentMouseDown, false );
+				document.addEventListener( 'wheel', onDocumentMouseWheel, false );
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+			}
+
+			function onWindowResize() {
+
+				windowHalfX = window.innerWidth / 2;
+				windowHalfY = window.innerHeight / 2;
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+
+			function onDocumentMouseDown( event ) {
+
+				event.preventDefault();
+
+				onPointerDownPointerX = event.clientX;
+				onPointerDownPointerY = event.clientY;
+
+				onPointerDownLon = lon;
+				onPointerDownLat = lat;
+
+				isUserInteracting = true;
+
+				//document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+				document.addEventListener( 'mouseup', onDocumentMouseUp, false );
+
+			}
+
+			function onDocumentMouseMove( event ) {
+
+				if (isUserInteracting) {
+					lon = ( event.clientX - onPointerDownPointerX ) * 0.1 + onPointerDownLon;
+					lat = ( event.clientY - onPointerDownPointerY ) * 0.1 + onPointerDownLat;
+				}
+
+				mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+				mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+
+			}
+
+			function onDocumentMouseUp( event ) {
+
+				//document.removeEventListener( 'mousemove', onDocumentMouseMove, false );
+				isUserInteracting = false;
+				document.removeEventListener( 'mouseup', onDocumentMouseUp, false );
+
+			}
+
+			function onDocumentMouseWheel( event ) {
+
+				fov += event.deltaY * 0.05;
+
+				camera.projectionMatrix.makePerspective( fov, window.innerWidth / window.innerHeight, 1, 1100 );
+
+			}
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				if (hasLoadObj) {
+					render();
+				}
+
+			}
+
+			function render() {
+
+				var now = performance.now();
+				var delta = (now - last) / 1000;
+
+				if (delta > 1) delta = 1; // safety cap on large deltas
+				last = now;
+
+				//lon += .15;
+				lat = Math.max( - 85, Math.min( 85, lat ) );
+				phi = THREE.Math.degToRad( 90 - lat );
+				theta = THREE.Math.degToRad( lon );
+
+				/*camera.position.x = 300 * Math.sin( phi ) * Math.cos( theta );
+				camera.position.y = 300 * Math.cos( phi );
+				camera.position.z = 300 * Math.sin( phi ) * Math.sin( theta );
+				camera.position.y = camera.position.y < 62 ? 62 : camera.position.y;
+				camera.position.z = camera.position.z < 200 ? 200 : camera.position.z;*/
+
+				camera.lookAt( new THREE.Vector3(0, 36, 0) );
+
+				positionUniforms.time.value = now;
+				positionUniforms.delta.value = delta;
+				velocityUniforms.time.value = now;
+				velocityUniforms.delta.value = delta;
+				/*particleUniforms.time.value = now;
+				particleUniforms.delta.value = delta;*/
+
+				// find intersections
+
+				raycaster.setFromCamera( mouse, camera );
+				var ray = raycaster.ray;
+				var pos = ray.at(250);
+				velocityUniforms.forcePos.value.set( pos.x, pos.y, pos.z );
+				positionUniforms.forcePos.value.set( pos.x, pos.y, pos.z );
+				forceSphere.position.x = pos.x;
+				forceSphere.position.y = pos.y;
+				forceSphere.position.z = pos.z;
+
+				gpuCompute.compute();
+
+				particleUniforms.texturePosition.value = gpuCompute.getCurrentRenderTarget( positionVariable ).texture;
+				particleUniforms.textureVelocity.value = gpuCompute.getCurrentRenderTarget( velocityVariable ).texture;
+
+				renderer.render( scene, camera );
+
+			}
+
+
+			function addShadowedLight( x, y, z, color, intensity ) {
+
+				var directionalLight = new THREE.DirectionalLight( color, intensity );
+				directionalLight.position.set( x, y, z );
+				scene.add( directionalLight );
+
+				directionalLight.castShadow = true;
+
+				var d = 100;
+				directionalLight.shadow.camera.left = -d;
+				directionalLight.shadow.camera.right = d;
+				directionalLight.shadow.camera.top = d;
+				directionalLight.shadow.camera.bottom = -d;
+
+				directionalLight.shadow.camera.near = 1;
+				directionalLight.shadow.camera.far = 300;
+
+				directionalLight.shadow.mapSize.width = WIDTH;
+				directionalLight.shadow.mapSize.height = WIDTH;
+
+				directionalLight.shadow.bias = -0.005;
+
+			}
+
+			function initComputeRenderer() {
+
+    			gpuCompute = new GPUComputationRenderer( WIDTH, WIDTH, renderer );
+
+				var dtPosition = gpuCompute.createTexture();
+				var dtVelocity = gpuCompute.createTexture();
+				fillPositionTexture( dtPosition );
+				fillVelocityTexture( dtVelocity );
+
+				velocityVariable = gpuCompute.addVariable( "textureVelocity", document.getElementById( 'fragmentShaderVelocity' ).textContent, dtVelocity );
+				positionVariable = gpuCompute.addVariable( "texturePosition", document.getElementById( 'fragmentShaderPosition' ).textContent, dtPosition );
+
+				gpuCompute.setVariableDependencies( velocityVariable, [ positionVariable, velocityVariable ] );
+				gpuCompute.setVariableDependencies( positionVariable, [ positionVariable, velocityVariable ] );
+
+				positionUniforms = positionVariable.material.uniforms;
+				velocityUniforms = velocityVariable.material.uniforms;
+
+				positionUniforms.time = { value: 0.0 };
+				positionUniforms.delta = { value: 0.0 };
+				positionUniforms.floorPosY = { value: 62. };
+				positionUniforms.forcePos = { value: new THREE.Vector3() };
+				positionUniforms.forceRadius = { value: forceRadius };
+				velocityUniforms.time = { value: 0.0 };
+				velocityUniforms.delta = { value: 0.0 };
+				velocityUniforms.floorPosY = { value: 62. };
+				velocityUniforms.forcePos = { value: new THREE.Vector3() };
+				velocityUniforms.forceRadius = { value: forceRadius };
+
+				velocityVariable.wrapS = THREE.RepeatWrapping;
+				velocityVariable.wrapT = THREE.RepeatWrapping;
+				positionVariable.wrapS = THREE.RepeatWrapping;
+				positionVariable.wrapT = THREE.RepeatWrapping;
+
+				var error = gpuCompute.init();
+				if ( error !== null ) {
+				    console.error( error );
+				}
+
+			}
+
+
+			function fillPositionTexture( texture ) {
+
+				var theArray = texture.image.data;
+
+				for ( var k = 0, kl = theArray.length; k < kl; k += 4 ) {
+
+					theArray[ k + 0 ] = ParticlesInitPosition[k / 4].x;
+					theArray[ k + 1 ] = ParticlesInitPosition[k / 4].y;
+					theArray[ k + 2 ] = ParticlesInitPosition[k / 4].z;
+					/*theArray[ k + 0 ] = Math.random() * 1000- 500;
+					theArray[ k + 1 ] = Math.random() * 1000 - 500;
+					theArray[ k + 2 ] = Math.random() * 1000 - 500;*/
+					//theArray[ k + 3 ] = 1;
+
+				}
+
+			}
+
+			function fillVelocityTexture( texture ) {
+
+				var theArray = texture.image.data;
+
+				for ( var k = 0, kl = theArray.length; k < kl; k += 4 ) {
+
+					theArray[ k + 0 ] = 0;
+					theArray[ k + 1 ] = 0;
+					theArray[ k + 2 ] = 0;
+					theArray[ k + 3 ] = 1;
+
+				}
+
+			}
+
+		</script>
+
+	</body>
+</html>
